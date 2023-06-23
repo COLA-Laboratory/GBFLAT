@@ -1,5 +1,5 @@
 <div class="item1" style="text-align:center">
-    <img src="3d_GBFLAT.png" width="100px", height="100px", class="center">
+    <img src="3d_GBFLAT.png" width="500px", height="235px", class="center">
 </div>
 
 <div class="item1" style="text-align:center">
