@@ -1,4 +1,8 @@
 <div class="item1" style="text-align:center">
+    <img src="3d_GBFLAT.pdf" width="100px", height="100px", class="center">
+</div>
+
+<div class="item1" style="text-align:center">
     <img src="GBFLAT_logo.png" width="400px", height="115px", class="center">
 </div>
 
