@@ -1,558 +1,456 @@
-
-import numpy as np
-import pandas as pd
-import networkx as nx
 import random
+import itertools
 import math
-import copy
+import pandas as pd
 
-from itertools import combinations
-from typing import Callable, Optional, Tuple, Union
-from abc import ABC, abstractmethod
-from GBFLAT.utils import random_list_gen
+class OptimizationProblem:
+    """
+    Base class for defining optimization problems.
 
-
-class ProblemInstance(ABC):
-
-    @abstractmethod
-
-    def maximize(self):
-        pass
-
-    def strictly_better(self, a, b):
-        return a > b if self.maximize() else a < b
-
-    def better_or_equal(self, a, b):
-        return a >= b if self.maximize() else a <= b
-
-    @abstractmethod
-    def full_eval(self, sol):
-        pass
-
-    @abstractmethod
-    def has_flip_delta_eval(self):
-        pass
-
-    @abstractmethod
-    def flip_delta_eval(self, i):
-        pass
-
-    @abstractmethod
-    def flip_with_delta(self, i):
-        pass
-
-    @abstractmethod
-    def two_rnd_flips(self):
-        pass
-
-
-class Solution:
-    """Represents a solution.
+    This class provides a framework for representing optimization problems
+    and includes methods for evaluating solutions and generating data for analysis.
+    Subclasses should implement specific optimization problem behavior.
 
     Parameters
-    ---------
-    problem_name: str
-        the name associated with the problem
-        must be the return of the problem_instance.name attribute
-
-    lst: Optional, list
-        solution representation
-
-    fitness: Optional, default 0
-        the fitness value associated to the solution
-
-    invalid: Optional, bool, default False
-        the invalid flag should be set true if the fitness
-        needs to be recomputed following some modification
-        of the solution
+    ----------
+    n : int
+        The number of variables in the optimization problem.
     """
 
-    def __init__(
-        self, 
-        problem_name:str, 
-        lst:Optional[list]=[], 
-        fitness:Optional[int]=0, 
-        invalid:Optional[bool]=False):
-
-        self.fitness = fitness
-        self.invalid = invalid
-        self.lst = lst
-        self.problem_name = problem_name
-
-    def __str__(self) -> str:
-        #return str(self.fitness) + (" (invalid) " if self.invalid else " ") + ','.join(str(i) for i in self.lst)
-        return str(self.fitness) + " " + str(self.lst)
-
-    def init_rnd_bitstring(self, n:int):
+    def __init__(self, n):
         """
-        Initialize the lst attribute to a uniformly random bitstring of length n.
-
-        Parameters
-        ---------
-        n: length of the bitstring
+        Initialize the optimization problem with a given number of variables.
         """
-        if self.problem_name == "NPP":
-            self.lst = [random.randint(0, 1) for i in range(n)]
-        if self.problem_name == "MaxSat":
-            self.lst = [random.randint(0, 1) for i in range(n)]
-        if self.problem_name == "KP":
-            self.lst = [random.randint(0, 1) for i in range(n)]
-        if self.problem_name == "TSP":
-            self.lst = list(range(n))
-            random.shuffle(self.lst)
-
-class Max_Sat(ProblemInstance):
-    """
-    Instance generator for Max Satisfiability problem, 
-
-    Parameters
-    --------- 
-    n: number of variables
-    k: number of clauses / number of variables
-    seed: random seed
-    """
-
-    def __init__(self, n:int, k:int, seed:Optional[int]=42):
-        
         self.n = n
-        self.k = k
-        self.seed = seed
-        self.name = "MaxSat"
-        rnd_gen = random.Random()
-        rnd_gen.seed(seed)
-        n_clause = int(n * k)
-
-        comb_list = list(combinations(list(range(-n+1,n)), 3))
-        posi_list = [rnd_gen.randrange(0, len(comb_list)) for j in range(n_clause)]
-        clause_list = []
-        for i in range(n_clause):
-            clause_list.append(comb_list[posi_list[i]])
-            
-        self.clause_list = clause_list
-
-    def maximize(self):
-        return False
-
-    def full_eval(self, sol:Callable):
-        """
-        evaluate the fitness of a given solution 
-        """
-        self.n = len(sol.lst)
-        cnt = 0
-        for clause in self.clause_list:
-            l = []
-            for literal in clause:
-                if literal < 0:
-                    l.append(1) if sol.lst[abs(literal)] == 0 else l.append(0)
-                else:
-                    l.append(sol.lst[literal])
-            if sum(l) != 0:
-                cnt += 1
-        sol.fitness = self.n * self.k - cnt
-        sol.invalid = False
+        self.variables = range(n)
     
-    @staticmethod
-    def has_flip_delta_eval():
-        return False
-
-    @staticmethod
-    def flip_delta_eval(self, i):
-        raise NotImplementedError()
-
-    @staticmethod
-    def flip_with_delta(self, i):
-        raise NotImplementedError()
-
-    def two_rnd_flips(self, sol:Callable, distance:Optional[int]=3):
+    def evaluate(self, config):
         """
-        draw random sample from k-bit neighbours, where k = distance
-        an alternative implementation could be used via neighbour_explorer function
-        """
-        
-        bits = random.sample(list(range(len(sol.lst))), distance)
-        for bit in bits:
-            sol.lst[bit] = 0 if sol.lst[bit] == 1 else 1
-        self.full_eval(sol)
+        Evaluate the fitness of a given configuration.
 
-
-class Knapsack(ProblemInstance):
-    """
-    Instance generator for Knapsack problem, 
-
-    Parameters
-    --------- 
-    n: number of variables
-    k: NaN
-    seed: NaN
-    """
-
-    def __init__(self,n,k=0,seed=0):
-
-        self.name = "KP"
-        self.n = n
-        self.k = k
-        self.seed = seed
-
-        rnd_gen = random.Random()
-        rnd_gen.seed(seed)
-        # inverse strongly correlated KP instances
-        if k == "inv_strong_corr":
-            value_list = [rnd_gen.randrange(1, 1000) for j in range(n)]
-            weight_list = [min(1000, value_list[j] + 100) for j in range(n)]
-        else:
-            weight_list = [rnd_gen.randrange(1, 1000) for j in range(n)]
-            # uncorrelated KP instances
-            if k == "un_corr":
-                value_list = [rnd_gen.randrange(1, 1000) for j in range(n)]
-            # weakly correlated KP instances
-            if k == "weak_corr" :
-                value_list = [rnd_gen.randrange(
-                    max(1, weight_list[j] - 100), 
-                    min(1000, weight_list[j] + 100)
-                    ) for j in range(n)]
-            # strongly correlated KP instances
-            if k == "strong_corr":
-                value_list = [min(1000, weight_list[j] + 100) for j in range(n)]
-        item_list = [(weight_list[i],value_list[i]) for i in range(n)]
-        self.items = item_list 
-        self.c = 0.55 * sum([weight for weight in weight_list])
-
-    def maximize(self):
-        return True
-
-    def full_eval(self, sol):
-        l = len(sol.lst)
-        assert(l == self.n)
-        weight = sum([sol.lst[i] * self.items[i][1] for i in range(l)])
-        if weight > self.c:
-            fitness = 0
-            sol.invalid = True
-        else:
-            fitness = sum([sol.lst[i] * self.items[i][0] for i in range(l)])
-            sol.invalid = False
-        sol.fitness = fitness
-        sol.weight = weight
-        
-
-    def weight(self, sol:Callable):
-        """
-        evaluate the fitness of solution
-        """
-        return sum([sol.lst[i] * self.items[i][1] for i in range(len(sol.lst))])
-
-    @staticmethod
-    def has_flip_delta_eval():
-        return False
-
-    @staticmethod
-    def flip_delta_eval(sol, i):
-        raise NotImplementedError()
-
-    @staticmethod
-    def flip_with_delta(sol, i, delta_fitness):
-        raise NotImplementedError()
-
-    def two_rnd_flips(self, sol:Callable, distance:Optional[int]=2):
-        """
-        draw random sample from k-bit neighbours, where k = distance
-        an alternative implementation could be used via neighbour_explorer function
-        """
-        
-        bits = random.sample(list(range(len(sol.lst))), distance)
-        for bit in bits:
-            sol.lst[bit] = 0 if sol.lst[bit] == 1 else 1
-        self.full_eval(sol)
-        if sol.invalid == True:
-            while sol.invalid != False:
-                bits = random.sample(list(range(len(sol.lst))), distance)
-                for bit in bits:
-                    sol.lst[bit] = 0 if sol.lst[bit] == 1 else 1
-                self.full_eval(sol)
-
-
-class NumberPartitioning(ProblemInstance):
-
-    def __init__(self, n, k, seed):
-        """
-        Instance generator for number partitioning problem
-
-        Parameters
-        --------- 
-        n: number of variables
-        k: number of clauses / number of variables
-        seed: random seed
-        """
-        self.name = "NPP"
-        rnd_gen = random.Random()
-        rnd_gen.seed(seed)
-        self.n = n
-        self.k = k
-        self.seed = seed
-        l = int(round(math.pow(2, n*k)))
-        self.a = [rnd_gen.randrange(1, l+1) for j in range(n)]
-
-    def __str__(self):
-        return "NPP n=" + str(self.n) + " k=" + str(self.k) + " seed=" + str(self.seed) + " " + str(self.a)
-
-    def maximize(self):
-        return False
-
-    def full_eval(self, sol):
-
-        l = len(sol.lst)
-        assert (l == self.n)
-        cost1 = sum([self.a[i] for i in range(l) if sol.lst[i] == 0])
-        cost2 = sum([self.a[i] for i in range(l) if sol.lst[i] == 1])
-        sol.fitness = cost1 - cost2 if cost1 > cost2 else cost2 - cost1
-        sol.invalid = False
-
-    @staticmethod
-    def has_flip_delta_eval():
-        return False
-
-    @staticmethod
-    def flip_delta_eval(self, i):
-        raise NotImplementedError()
-
-    @staticmethod
-    def flip_with_delta(self, i):
-        raise NotImplementedError()
-
-    def two_rnd_flips(self, sol:Callable, distance:Optional[int]=2):
-        """
-        draw random sample from k-bit neighbours, where k = distance
-        an alternative implementation could be used via neighbour_explorer function
-        """
-        bits = random.sample(list(range(len(sol.lst))), distance)
-        for bit in bits:
-            sol.lst[bit] = 0 if sol.lst[bit] == 1 else 1
-        self.full_eval(sol)
-
-
-
-
-class TSP(ProblemInstance):
-
-    def __init__(self, n=None, k=None, seed=None, cities=None, kind=None, name=None):
-        """
-        Instance generator for traveling salesman problem. In particular, here we 
-        implement random Eulidean TSP instances, where the location of each city is 
-        randomly drawn in a k * k coordinate.
+        This method should be implemented by subclasses to define the 
+        specific evaluation criteria for the optimization problem.
 
         Parameters
         ----------
-        n: number of cities to visit
-        k: the length of the coordinate, i.e., the location of each city will be 
-        limited in a (k,k) square whose lower left corner is located at the origin.
-        seed: random seed, to allow for repetition.
+        config : tuple
+            A configuration representing a potential solution.
+
+        Raises
+        ------
+        NotImplementedError
+            If the method is not implemented in a subclass.
         """
-        # initialize basic parameters
-        if name != None:
-            self.name = name
-        else: 
-            self.name = "TSP"
-            
-        random.seed(seed)
-        self.n = n
+        
+        raise NotImplementedError("Subclasses should implement this method.")
+    
+    def get_all_configs(self):
+        """
+        Generate all possible configurations for the problem.
+
+        This method should be implemented by subclasses to provide the
+        complete set of possible configurations for the problem.
+
+        Returns
+        -------
+        iterator
+            An iterator over all possible configurations.
+
+        Raises
+        ------
+        NotImplementedError
+            If the method is not implemented in a subclass.
+        """
+
+        raise NotImplementedError("Subclasses should define this method to generate all configurations.")
+    
+    def get_data(self):
+        """
+        Generate a DataFrame containing configurations and their fitness values.
+
+        Returns
+        -------
+        pandas.DataFrame
+            A DataFrame with columns `config` (list of variables) and `fitness`.
+        """
+
+        all_configs = self.get_all_configs()
+        config_values = {config: self.evaluate(config) for config in all_configs}
+        
+        data = pd.DataFrame(list(config_values.items()), columns=["config", "fitness"])
+        data['config'] = data['config'].apply(list)
+        return data
+
+class NK(OptimizationProblem):
+    """
+    NK model for fitness landscapes.
+
+    This class represents an NK landscape, a model used to study the complexity of 
+    adaptive landscapes based on interactions among components.
+
+    Parameters
+    ----------
+    n : int
+        The number of variables in the problem.
+
+    k : int
+        The number of interacting components for each variable.
+
+    exponent : int, default=1
+        An exponent used to transform the fitness values.
+    """
+
+    def __init__(self, n, k, exponent=1):
+        """
+        Initialize the NK model with given parameters.
+        """
+
+        super().__init__(n)
         self.k = k
-        self.seed = seed 
-
-        if cities == None:
-
-            # generate random coordinates for a list of cities
-            cities = []
-            for i in range(n):
-                x = random.uniform(0, n * 100)
-                y = random.uniform(0, n * 100)
-                cities.append((x, y))
-        else:
-            n = len(cities)
-            self.n = n
-            print("number of cities:",n)
-
-        # generate a distance matrix
-        dist_matrix = np.zeros((n, n))
-        for i in range(n):
-            for j in range(n):
-                x1, y1 = cities[i]
-                x2, y2 = cities[j]
-                if kind == "ATT":
-                    dist_matrix[i][j] = int(math.sqrt(((x2 - x1) ** 2 + (y2 - y1) ** 2) / 10))
-                else: 
-                    dist_matrix[i][j] = int(math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2))
-        self.dist_matrix = dist_matrix
-
-    def maximize(self):
-        """
-        TSP is a minimization problem
-        """
-        return False
+        self.exponent = exponent
+        self.dependence = [
+            tuple(sorted([e] + random.sample(set(self.variables) - set([e]), k)))
+            for e in self.variables
+        ]
+        self.values = {}
     
-    @staticmethod
-    def has_flip_delta_eval():
-        return False
-
-    @staticmethod
-    def flip_delta_eval(self, i):
-        raise NotImplementedError()
-
-    @staticmethod
-    def flip_with_delta(self, i):
-        raise NotImplementedError()
-    
-    def full_eval(self, sol):
+    def get_all_configs(self):
         """
-        Evaluate the fitness value of a given solution, which in case of TSP, 
-        is the total distance of the tour. 
+        Generate all possible binary configurations for the NK model.
+
+        Returns
+        -------
+        iterator
+            An iterator over all binary configurations of length `n`.
         """
-        total_distance = 0
-        # for each city except the last one, add the distance to its predecessor, 
-        for i in range(self.n - 1):
-            total_distance += self.dist_matrix[sol.lst[i]][sol.lst[i + 1]]
 
-        # add distance from last city to first city
-        total_distance += self.dist_matrix[sol.lst[self.n - 1]][sol.lst[0]]
-        sol.fitness = int(total_distance)
-        sol.invalid = False
+        return itertools.product((0, 1), repeat=self.n)
 
-    def two_rnd_flips(self, sol, distance=None):
+    def evaluate(self, config):
         """
-        TO IMPLEMENT: the name of this function should be changed to "perturb"
-        Perturb the solution. Here double-bridge kick is implemented. 
+        Evaluate the fitness of a configuration in the NK model.
 
-        Perform double bridge perturbation on a solution. 
+        Parameters
+        ----------
+        config : tuple
+            A binary configuration representing a potential solution.
+
+        Returns
+        -------
+        float
+            The fitness value of the configuration.
         """
-        # get the indicies to perform perturbation
-        perturb_indicies = get_perturbation_indices(self.n)
-        # perform perturbation 
-        sol.lst = apply_double_bridge(sol.lst, perturb_indicies)
-        # evaluate the fitness of the new solution 
-        self.full_eval(sol)
 
+        total_value = 0.0
+        config = tuple(config)  
+        for e in self.variables:
+            key = (e,) + tuple(config[i] for i in self.dependence[e])
+            if key not in self.values:
+                self.values[key] = random.random()
+            total_value += self.values[key]
+        
+        total_value /= self.n
+        if self.exponent != 1:
+            total_value = math.pow(total_value, self.exponent)
+        
+        return total_value
 
-def get_perturbation_indices(n):
+class RoughMountFuji(OptimizationProblem):
     """
-    Returns a pair of a pair of indices representing a double-bridge perturbation.
-    Each pair represents 2 edges removed in a non-sequential 2-opt move.
-    An index i represents the edge from i to i+1.
+    Rough Mount Fuji (RMF) model for fitness landscapes.
+
+    This model combines a smooth fitness component with a rugged (random) component,
+    creating a landscape with controlled ruggedness.
 
     Parameters
     ----------
-    n: the number of cities of the problem instance.
+    n : int
+        The number of variables in the optimization problem.
+    alpha : float, default=0.5
+        The ruggedness parameter that determines the balance between the smooth
+        and rugged components. Must be between 0 and 1.
     """
 
-    assert(n > 4) # minimum of 5 edges to perform a non-trivial perturbation.
-    first = random.randrange(n)
+    def __init__(self, n, alpha=0.5):
+        """
+        Initialize the RMF model with the given number of variables and ruggedness parameter.
+        """
+        super().__init__(n)
+        self.alpha = alpha
+        self.smooth_contribution = [random.uniform(-1, 1) for _ in range(n)]
+        self.random_values = {}
 
-    # there must be a gap of at least one edge between first and this edge.
-    # there are 3 edges that cannot be chosen, first, first + 1, and first - 1.
-    second = random.randrange(n - 3)
-    second = (first + 2 + second) % n
+    def get_all_configs(self):
+        """
+        Generate all possible binary configurations for the RMF model.
 
-    # normalize first to be min and second to be max.
-    pair = (first, second)
-    first = min(pair)
-    second = max(pair)
+        Returns
+        -------
+        iterator
+            An iterator over all binary configurations of length `n`.
+        """
+        return itertools.product((0, 1), repeat=self.n)
 
-    # get third edge, in between first and second.
-    assert(second - first > 1)
-    third = random.randrange(first + 1, second)
-    excluded_edges = second - first + 1
-    available_edges = n - excluded_edges
+    def evaluate(self, config):
+        """
+        Evaluate the fitness of a configuration in the RMF model.
 
-    # get fourth edge outside of first and second edge.
-    fourth = random.randrange(available_edges)
-    fourth = (second + 1 + fourth) % n
+        The fitness is computed as a weighted sum of the smooth and rugged components.
 
-    index_set = set([first, second, third, fourth])
-    if len(index_set) != 4:
-        print([first, second, third, fourth])
-    assert(len(index_set) == 4)
+        Parameters
+        ----------
+        config : tuple
+            A binary configuration representing a potential solution.
 
-    assert(third - first > 0)
-    assert(second - third > 0)
-    assert(fourth > second or fourth < first)
+        Returns
+        -------
+        float
+            The fitness value of the configuration.
+        """
+        config = tuple(config)
 
-    return ((first, second), (third, fourth))
+        # Smooth component
+        smooth_value = sum(self.smooth_contribution[i] * config[i] for i in self.variables)
 
-def apply_double_bridge(tour, indices):
+        # Rugged component
+        if config not in self.random_values:
+            self.random_values[config] = random.random()
+        
+        rugged_value = self.random_values[config]
+
+        # Combine the smooth and rugged components using alpha
+        fitness = (1 - self.alpha) * smooth_value + self.alpha * rugged_value
+
+        return fitness
+
+class HoC(RoughMountFuji):
     """
-    Apply a double-bridge (4-opt) kick on a given solution of TSP,
-    which is usually a local optimum tour. 
+    House of Cards (HoC) model for fitness landscapes.
+
+    This model represents a purely random fitness landscape where each configuration
+    is assigned a random fitness value independently of others. It is a special case
+    of the Rough Mount Fuji (RMF) model where the ruggedness parameter alpha is 1.
 
     Parameters
     ----------
-    tour: the initial solution to be perturbed.
-    indices: the indices of the cities to apply the perturbation. This 
-    should be generated using the `get_perturbation_indices` function. 
+    n : int
+        The number of variables in the optimization problem.
     """
 
-    pair1, pair2 = indices
-    first, second = pair1
-    third, fourth = pair2
-    seg1 = tour[:first + 1]
-    seg2 = tour[first + 1:third + 1]
-    seg3 = tour[third + 1:second + 1]
-    seg4 = tour[second + 1:]
+    def __init__(self, n):
+        """
+        Initialize the HoC model with the given number of variables.
+        """
+        # Initialize the RMF model with alpha = 1 (purely random)
+        super().__init__(n, alpha=1.0)
 
-    assert(len(seg1) + len(seg2) + len(seg3) + len(seg4) == len(tour))
+    def evaluate(self, config):
+        """
+        Evaluate the fitness of a configuration in the HoC model.
 
-    if fourth < first:
-        seg0 = seg1[:fourth + 1]
-        seg1 = seg1[fourth + 1:]
-        new_tour = seg0 + seg3 + seg2 + seg1 + seg4
+        The fitness is purely random for each configuration.
 
-    else:
-        assert(fourth > second)
-        seg5 = seg4[fourth - second:]
-        seg4 = seg4[:fourth - second]
-        new_tour = seg1 + seg4 + seg3 + seg2 + seg5
+        Parameters
+        ----------
+        config : tuple
+            A binary configuration representing a potential solution.
 
-    assert(not same_tour(tour, new_tour))
+        Returns
+        -------
+        float
+            The random fitness value of the configuration.
+        """
+        config = tuple(config)
 
-    return new_tour
+        # Purely random fitness, no smooth component
+        if config not in self.random_values:
+            self.random_values[config] = random.random()
 
-def same_tour(t1, t2):
+        return self.random_values[config]
+    
+class Additive(OptimizationProblem):
     """
-    determine whether two tours are the same 
+    Additive model for fitness landscapes.
+
+    This model represents a fitness landscape where the fitness of a configuration
+    is the sum of independent contributions from each variable.
+
+    Parameters
+    ----------
+    n : int
+        The number of variables in the optimization problem.
     """
 
-    for i in range(len(t1)):
-        if t1[i] != t2[i]:
-            return False
-    return True
+    def __init__(self, n):
+        """
+        Initialize the Additive model with the given number of variables.
+        """
+        super().__init__(n)
+        # Assign a random fitness contribution for each variable set to 0 and 1
+        self.contributions = {i: (random.random(), random.random()) for i in self.variables}
 
-def double_bridge(sol):
+    def get_all_configs(self):
+        """
+        Generate all possible binary configurations for the Additive model.
 
-    n = len(sol)
-    # get the indicies to perform perturbation
-    perturb_indicies = get_perturbation_indices(n)
-    # perform perturbation 
-    sol = apply_double_bridge(sol, perturb_indicies)
-    # evaluate the fitness of the new solution 
-    return sol 
+        Returns
+        -------
+        iterator
+            An iterator over all binary configurations of length `n`.
+        """
+        return itertools.product((0, 1), repeat=self.n)
 
-def one_bit_flip(sol):
+    def evaluate(self, config):
+        """
+        Evaluate the fitness of a configuration in the Additive model.
 
-    neighbours = neighbour_explorer(sol,distance=1)
-    sol = random.choice(neighbours)
-    return sol
+        The fitness is computed as the sum of independent contributions of each variable.
 
-def neighbour_explorer(sol,distance=1):
+        Parameters
+        ----------
+        config : tuple
+            A binary configuration representing a potential solution.
+
+        Returns
+        -------
+        float
+            The fitness value of the configuration.
+        """
+        config = tuple(config)
+        fitness = sum(self.contributions[i][config[i]] for i in self.variables)
+        return fitness
+
+class Eggbox(OptimizationProblem):
     """
-    return all d-flip neighbours of a given binary solution
-    """
-    n = len(sol)
-    neighbours = []
-    for j in range(1,distance+1):
-        neighbours_ = []
-        posi_list = list(combinations(list(range(0,n)), j))
-        for comb in posi_list:
-            flip_sol = copy.deepcopy(list(sol))
-            for i in range(j):
-                posi = comb[i]
-                flip_sol[posi] = 0 if sol[posi] == 1 else 1
-            neighbours_.append(flip_sol)
-        neighbours = neighbours + neighbours_
+    Eggbox model for fitness landscapes.
 
-    return neighbours
+    This model represents a fitness landscape with regularly spaced peaks and valleys,
+    resembling the structure of an egg carton.
+
+    Parameters
+    ----------
+    n : int
+        The number of variables in the optimization problem.
+
+    frequency : float, default=1.0
+        The frequency of the peaks and troughs in the landscape.
+    """
+
+    def __init__(self, n, frequency=1.0):
+        """
+        Initialize the Eggbox model with the given number of variables and frequency.
+        """
+        super().__init__(n)
+        self.frequency = frequency
+
+    def get_all_configs(self):
+        """
+        Generate all possible binary configurations for the Eggbox model.
+
+        Returns
+        -------
+        iterator
+            An iterator over all binary configurations of length `n`.
+        """
+        return itertools.product((0, 1), repeat=self.n)
+
+    def evaluate(self, config):
+        """
+        Evaluate the fitness of a configuration in the Eggbox model.
+
+        The fitness is determined based on the sum of the variables and a sine function,
+        creating a periodic landscape with alternating peaks and valleys.
+
+        Parameters
+        ----------
+        config : tuple
+            A binary configuration representing a potential solution.
+
+        Returns
+        -------
+        float
+            The fitness value of the configuration.
+        """
+        config = tuple(config)
+        # Sum of the binary configuration elements
+        sum_of_elements = sum(config)
+        # Fitness value using a sine function to create periodic peaks
+        fitness = math.sin(self.frequency * sum_of_elements * math.pi) ** 2
+        return fitness
+
+    
+class Max3Sat(OptimizationProblem):
+    """
+    Max-3-SAT optimization problem.
+
+    This class represents the Max-3-SAT problem, where the goal is to maximize
+    the number of satisfied clauses in a Boolean formula with exactly three literals per clause.
+
+    Parameters
+    ----------
+    n : int
+        The number of Boolean variables.
+
+    alpha : float
+        The clause-to-variable ratio, determining the number of clauses.
+    """
+
+    def __init__(self, n, alpha):
+        """
+        Initialize the Max-3-SAT problem with given parameters.
+        """
+
+        super().__init__(n)
+        self.m = int(alpha * n)
+        self.clauses = self._generate_clauses()
+        
+    def _generate_clauses(self):
+        """
+        Generate a set of 3-literal clauses.
+
+        Returns
+        -------
+        list
+            A list of randomly generated 3-literal clauses.
+        """
+
+        clauses = set()
+        while len(clauses) < self.m:
+            vars = random.sample(self.variables, 3)
+            clause = tuple((var, random.choice([True, False])) for var in vars)
+            clauses.add(clause)
+        return list(clauses)
+    
+    def get_all_configs(self):
+        """
+        Generate all possible configurations for the Max-3-SAT problem.
+
+        Returns
+        -------
+        iterator
+            An iterator over all Boolean configurations of length `n`.
+        """
+
+        return itertools.product((True, False), repeat=self.n)
+
+    def evaluate(self, config):
+        """
+        Evaluate the fitness of a configuration in the Max-3-SAT problem.
+
+        Parameters
+        ----------
+        config : tuple
+            A Boolean configuration representing a potential solution.
+
+        Returns
+        -------
+        int
+            The number of satisfied clauses.
+        """
+
+        num_satisfied = 0
+        for clause in self.clauses:
+            if any((config[var] == is_positive) for var, is_positive in clause):
+                num_satisfied += 1
+        return num_satisfied
+    

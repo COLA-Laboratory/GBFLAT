@@ -1,227 +1,191 @@
-import copy
-import random 
-import math
 import pandas as pd
-from GBFLAT.Problems import Solution
-from GBFLAT.Problems import one_bit_flip, double_bridge
-from GBFLAT.LocalOptimaNetwork import LON
-from joblib import Parallel, delayed
-from decimal import Decimal
+import networkx as nx
+import random 
+import numpy as np 
+from typing import List, Any, Dict, Tuple, Set, Union, Optional
 
+def local_search(
+        graph: nx.DiGraph, 
+        node: Any, 
+        weight: str, 
+        search_method: str = "best-improvement"
+    ) -> Any:
+    """
+    Conducts a local search on a directed graph from a specified node, using a specified edge attribute 
+    for decision-making regarding the next node.
 
-def temp_updator(x,initial_temp):
-    return initial_temp * (0.995 ** (x))
+    Parameters
+    ----------
+    graph : nx.DiGraph
+        The directed graph where the search is carried out.
 
-def sim_anneal(
-        instance,
-        neighbor_explorer,
-        temp_updator,
-        n_iter,
-        initial_temp=40000):
+    node : Any
+        The index of the starting node for the local search.
+
+    weight : str
+        The edge attribute key that helps determine the best move during the search.
+
+    search_method : str
+        Specifies the local search method. Available options:
+        - 'best-improvement': Analyzes all adjacent nodes and chooses the one with the optimal 
+          improvement in the weight attribute.
+        - 'first-improvement': Chooses the first adjacent node that shows any improvement in the weight attribute.
+
+    Returns
+    -------
+    Any: The index of the next node to move to, determining the search direction.
+    """
+
+    if search_method not in ["best-improvement", "first-improvement"]:
+        raise ValueError(f"Unsupported search method: {search_method}")
+
+    out_edges = graph.out_edges(node, data=True)
+    if not out_edges:
+        return None
     
-    # initialization 
-    sol = Solution(problem_name=instance.name)
-    sol.init_rnd_bitstring(instance.n)
-    instance.full_eval(sol)
-    best_sol = copy.deepcopy(sol)
-    # logger
-    sol_list, fit_list, candi_list, candi_fit_list, move_list, prob_list, t_list = [],[],[],[],[],[],[]
-    # main loop
-    for i in range(n_iter):
+    best_node = None
+    best_value = float('-inf')
 
-        sol_list.append(sol.lst)
-        fit_list.append(sol.fitness)
-        # in each move, we random select a neighbour of current solution as the candidate for the next move
-        neighbours = neighbor_explorer(sol.lst)
-        candidate_sol = random.choice(neighbours)
-        candidate_sol = Solution(problem_name=instance.name,lst=candidate_sol)
-        instance.full_eval(candidate_sol)
+    if search_method == "best-improvement":
+        for _, next_node, data in out_edges:
+            value = data.get(weight, float('-inf'))
+            if value > best_value:
+                best_value = value
+                best_node = next_node
+    elif search_method == "first-improvement":
+        current_value = graph.nodes[node].get(weight, float('-inf'))
+        for _, next_node, data in out_edges:
+            value = data.get(weight, float('-inf'))
+            if value > current_value:
+                return next_node
 
-        # calculate accept probability, which is dependent on 
-        # the difference of the fitness of the two solutions, and the current temperature
-        temp = temp_updator(i,initial_temp)
-        t_list.append(temp)
-        if instance.maximize():
-            ac_prob = math.exp(-(candidate_sol.fitness - sol.fitness) / temp)
-        else: 
-            ac_prob = math.exp(-(candidate_sol.fitness - sol.fitness) / temp)
-        
-        prob_list.append(ac_prob)
-        candi_list.append(candidate_sol.lst)
-        candi_fit_list.append(candidate_sol.fitness)
+    return best_node
 
-        if instance.maximize():
-            # if the fitness of this candidate is better than current solution, we accept it
-            if candidate_sol.fitness > sol.fitness:
-                sol = candidate_sol
-                move_list.append("AC_Direc")
-            # othewise, we accept it with a probability calculated above
-            elif random.random() < ac_prob:
-                sol = candidate_sol
-                move_list.append("AC_Prob")
-            else:
-                move_list.append("Rej")
-        else:
-            if candidate_sol.fitness < sol.fitness:
-                sol = candidate_sol
-                move_list.append("AC_Direc")
-            elif random.random() < ac_prob:
-                sol = candidate_sol
-                move_list.append("AC_Prob")
-            else:
-                move_list.append("Rej")
-        # if the current solution is better than the best_sol, replace the best_sol with sol
-        if instance.maximize():
-            if sol.fitness > best_sol.fitness:
-                best_sol = sol
-        else:
-            if sol.fitness < best_sol.fitness:
-                best_sol = sol
+def hill_climb(
+        graph: nx.DiGraph, 
+        node: int, 
+        weight: str, 
+        verbose: int = 0,
+        return_trace: bool = False,
+        search_method: str = "best-improvement"
+    ) -> Tuple[Any, int, List[int]]:
+    """
+    Performs hill-climbing local search on a directed graph starting from a specified node, using a particular
+    edge attribute as a guide for climbing.
 
-    logger = pd.DataFrame(
-        data=list(zip(sol_list,fit_list,candi_list,candi_fit_list,move_list,prob_list,t_list)),
-        columns=["curr_sol","fit","candi_sol","candi_fit","next-move","prob","temp"])
+    Parameters
+    ----------
+    graph : nx.DiGraph
+        The directed graph on which the hill climbing is performed.
+
+    node : int
+        The indice of the starting node for the hill climbing search.
+
+    weight : str
+        The edge attribute key used to determine the "weight" during climbing, which guides the search.
+
+    verbose : int, default=0
+        The verbosity level for logging progress, where 0 is silent and higher values increase the verbosity.
     
-    logger.loc[logger["prob"] >= 1, "prob"] = 1
-    
-    return best_sol, logger
+    return_trace: bool, default=False
+        Whether to return the trace of the search as a list of node indices. 
 
+    search_method : str
+        Specifies the method of local search to use. Options include:
+        - 'best-improvement': Evaluates all neighbors and selects the one with the most significant
+          improvement in the weight attribute.
+        - 'first-improvement': Selects the first neighbor that shows any improvement in the weight attribute.
 
-# def temp_exp_s(x,initial_temp):
-    
-#     new_temp = initial_temp * (0.97 ** (x / 20))
-#     if new_temp < 1e-5:
-#         return 1e-5
-#     else:
-#         return new_temp
-    
-def temp_exp_s(x,initial_temp):
-    
-    new_temp = initial_temp * (0.95 ** (x / 100))
-    if new_temp < 1e-5:
-        return 1e-5
+    Returns
+    -------
+    Tuple[Any, int]
+        A tuple containing:
+        - The final local optimum node reached.
+        - The total number of steps taken in the search process.
+
+    Example
+    -------
+    ```python
+    >>> lo, steps, trace = hill_climb(graph=landscape.graph, node=0, weight="delta_fit")
+    >>> print(f"configuration visited: {trace}")
+    >>> print(f"local optimum id: {lo}")
+    configuration visited: [0, 1, 341, 681, 2041, 1701, 1706, 1705, 1365, 1370, 1390, 1730, 1750]
+    local optimum id: 1750
+    ```
+    """
+
+    step = 0
+    visited = {node} 
+    trace = [node]   
+
+    if verbose:
+        print(f"Hill climbing begins from {node}...")
+
+    current_node = node
+    next_node = local_search(graph, current_node, weight, search_method)
+
+    while next_node is not None and next_node not in visited:
+        visited.add(next_node)
+        trace.append(next_node)
+        step += 1
+
+        if verbose:
+            print(f"# step: {step}, move from {current_node} to {next_node}")
+
+        current_node = next_node
+        next_node = local_search(graph, current_node, weight, search_method)
+
+    if verbose:
+        print(f"Finished at node {current_node} with {step} step(s).")
+
+    if return_trace:
+        return current_node, step, trace
     else:
-        return new_temp
+        return current_node, step
 
-def temp_exp_f(x,initial_temp):
+def random_walk(
+        graph: nx.DiGraph, 
+        start_node: Any, 
+        attribute: Optional[str] = None, 
+        walk_length: int = 100
+    ) -> pd.DataFrame:
+    """
+    Performs an optimized random walk on a directed graph starting from a specified node, 
+    optionally logging a specified attribute at each step.
+
+    Parameters:
+    - graph (nx.DiGraph): The directed graph on which the random walk is performed.
+    - start_node: The starting node for the random walk.
+    - attribute (str, optional): The node attribute to log at each step of the walk. If None, 
+        only nodes are logged.
+    - walk_length (int): The length of the random walk. Default is 100.
+
+    Returns:
+    - pd.DataFrame: A DataFrame containing the step number, node id, and optionally the 
+        logged attribute at each step.
+    """
     
-    new_temp = initial_temp * (0.98 ** x)
-    if new_temp < 1e-5:
-        return 1e-5
+    node = start_node
+    logger = np.empty((walk_length, 3), dtype=object)
+    cnt = 0
+
+    while cnt < walk_length:
+        if not graph.has_node(node):
+            raise ValueError("Node not in graph")
+
+        neighbors = list(graph.successors(node)) + list(graph.predecessors(node))
+        if not neighbors:
+            break
+
+        node = random.choice(neighbors)
+        if attribute:
+            attr_value = graph.nodes[node].get(attribute, None)
+            logger[cnt] = [cnt, node, attr_value]
+        else:
+            logger[cnt] = [cnt, node, None]
+        cnt += 1
+
+    if attribute:
+        return pd.DataFrame(logger[:cnt], columns=["step", "node_id", attribute])
     else:
-        return new_temp
-
-def temp_log(x,initial_temp):
-    
-    return initial_temp / (x + 1)
-
-def sampling(instance):
-
-    sol = Solution(problem_name=instance.name)
-    sol.init_rnd_bitstring(instance.n)
-    instance.full_eval(sol)
-    return sol.fitness
-
-def sim_anneal_target(instance,
-                      target,
-                      initial_temp,
-                      max_iter=100000,
-                      cooling_method="auto",
-                      neighbor_explorer="auto",
-                      summary=False,
-                      mute=True
-                      ):
-    
-    # initialization 
-    sol = Solution(problem_name=instance.name)
-    sol.init_rnd_bitstring(instance.n)
-    instance.full_eval(sol)
-    best_sol = copy.deepcopy(sol)
-    # initialize FE value
-    func_eva = 0
-
-    # initialize strategies
-    # set neighbor exploration method
-    if neighbor_explorer == "auto":
-        if instance.name == "TSP":
-            neighbor_explorer = double_bridge
-        else:
-            neighbor_explorer = one_bit_flip
-
-    # set cooling method
-    if cooling_method == "auto":
-        cooling_method = temp_exp_s
-    elif cooling_method == "exp_slow":
-        cooling_method = temp_exp_s
-    elif cooling_method == "exp_fast":
-        cooling_method = temp_exp_f
-    elif cooling_method == "log":
-        cooling_method = temp_log
-
-    # main loop
-
-    fit_list, temp_list = [], []
-    for i in range(max_iter):
-
-        candidate_sol = neighbor_explorer(sol.lst)
-        candidate_sol = Solution(problem_name=instance.name,lst=candidate_sol)
-        instance.full_eval(candidate_sol)
-
-        temp = cooling_method(i,initial_temp)
-
-        if instance.maximize():
-            try:
-                ac_prob = math.exp(-(candidate_sol.fitness - sol.fitness) / temp)
-            except:
-                ac_prob = 0
-        else: 
-            try:
-                ac_prob = math.exp(-(candidate_sol.fitness - sol.fitness) / temp)
-            except:
-                ac_prob = 0
-
-        if ac_prob > 1:
-            ac_prob = 1
-        
-        if mute == False:
-            # print("iter:",i,"temp:{:.2f}".format(temp),"fitness:",sol.fitness,"next_move:{:.5E}".format(Decimal(ac_prob)))
-            print("iter:",i,"temp:{:.2f}".format(temp),"fitness:",str(sol.fitness).ljust(5),"next_move_fit:",str(candidate_sol.fitness).ljust(10),\
-                  "prob:",ac_prob)
-            
-        if instance.maximize():
-            # if the fitness of this candidate is better than current solution, we accept it
-            if candidate_sol.fitness > sol.fitness:
-                sol = candidate_sol
-            elif random.random() < ac_prob:
-                sol = candidate_sol
-        else:
-            if candidate_sol.fitness < sol.fitness:
-                sol = candidate_sol
-            elif random.random() < ac_prob:
-                sol = candidate_sol
-  
-        # if the current solution is better than the best_sol, replace the best_sol with sol
-        if instance.maximize():
-            if sol.fitness > best_sol.fitness:
-                best_sol = sol
-        else:
-            if sol.fitness < best_sol.fitness:
-                best_sol = sol
-        # if the current solution meets the target value, then terminate the algorithm
-        if instance.maximize():
-            if sol.fitness >= target:
-                break
-        else:
-            if sol.fitness <= target:
-                break
-
-        func_eva += 1
-        fit_list.append(sol.fitness)
-        temp_list.append(temp)
-
-    if summary == True:
-        print("summary:\n","instance:",instance.name,"\n","target:",target,"\n","initial_temp:",initial_temp,"\n",
-            "cooling_method:",cooling_method,"\n","neighbor_explorer:",neighbor_explorer,"\n","max_iter:",max_iter,
-            "\n","best_sol:",best_sol.fitness,"\n","func_eva:",func_eva,"\n","final_temp:",temp)
-        
-    return best_sol, func_eva
+        return pd.DataFrame(logger[:cnt], columns=["step", "node_id"])
